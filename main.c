@@ -13,6 +13,8 @@
     #define CLOSE_SOCKET        closesocket
     uint8_t WindowsSocketsInitialised = 0;
 
+    const char *inet_ntop ( int af, const void *src, char *dst, socklen_t size );
+
 #elif defined(unix) || defined(__unix) || defined(__unix__)
 
     #include <sys/socket.h>
@@ -25,13 +27,16 @@
 
 #endif
 
+// #define SOCKET_PROTOCOL_IPV4
+#define SOCKET_PROTOCOL_IPV6
 #define SOCKET_BUFFER_SIZE                      1024
 #define SOCKET_CONNECTIONS_LIMIT                16
+
 #define SERVER_STATUS_SAFE_TERMINATION          0
 #define SERVER_STATUS_RUNNING                   1
 #define SERVER_STATUS_WINDOWS_SOCKETS_ERROR     2
 #define SERVER_STATUS_SOCKET_ERROR              3
-#define SERVER_STATUS_SETSOCKOPT_ERROR          4
+#define SERVER_STATUS_SOCKET_OPTION_ERROR       4
 #define SERVER_STATUS_BIND_ERROR                5
 #define SERVER_STATUS_LISTEN_ERROR              6
 #define SERVER_WELCOME_MESSAGE                  "Connected to Telnet Server\r\n> "
@@ -42,7 +47,7 @@ uint8_t ServerStatus = 1;
 
 void disconnectClient ( SOCKET ClientSockets [], uint16_t ClientIndex );
 void onTerminate ( );
-    
+
 int main ( int argc, char *argv[] ) {
 
     atexit( onTerminate );
@@ -101,13 +106,27 @@ int main ( int argc, char *argv[] ) {
 
     #endif
 
-    SOCKET SocketHandle = socket( AF_INET6, SOCK_STREAM, 0 ); // AF_INET for IPv4, AF_INET6 for IPv6
-    int SocketOption = 1;
-    struct sockaddr_in6 SocketAddress; // sockaddr_in for IPv4, sockaddr_in6 for IPv6
+    #if defined(SOCKET_PROTOCOL_IPV4)
 
-    SocketAddress.sin6_family = AF_INET6; // AF_INET for IPv4, AF_INET6 for IPv6
-    SocketAddress.sin6_addr = in6addr_any;
-    SocketAddress.sin6_port = htons( (uint16_t) PortNumber );
+        SOCKET SocketHandle = socket( AF_INET, SOCK_STREAM, 0 );
+        struct sockaddr_in SocketAddress;
+        int SocketOption = 1;
+
+        SocketAddress.sin_family = AF_INET;
+        SocketAddress.sin_addr.s_addr = INADDR_ANY;
+        SocketAddress.sin_port = htons( (uint16_t) PortNumber );
+
+    #elif defined(SOCKET_PROTOCOL_IPV6)
+
+        SOCKET SocketHandle = socket( AF_INET6, SOCK_STREAM, 0 );
+        struct sockaddr_in6 SocketAddress;
+        int SocketOption = 1;
+
+        SocketAddress.sin6_family = AF_INET6;
+        SocketAddress.sin6_addr = in6addr_any;
+        SocketAddress.sin6_port = htons( (uint16_t) PortNumber );
+
+    #endif
 
     if ( SocketHandle == -1 ) {
 
@@ -120,7 +139,7 @@ int main ( int argc, char *argv[] ) {
 
         printf( " Error on setsockopt()\n" );
         
-        ServerStatus = SERVER_STATUS_SETSOCKOPT_ERROR;
+        ServerStatus = SERVER_STATUS_SOCKET_OPTION_ERROR;
         return ServerStatus; }
 
     if ( bind( SocketHandle, (struct sockaddr*) &SocketAddress, sizeof(SocketAddress) ) == -1 ) {
@@ -170,18 +189,39 @@ int main ( int argc, char *argv[] ) {
 
         if ( FD_ISSET( SocketHandle, &Clients ) ) { // New client connection
 
-            struct sockaddr_in6 ClientSocketAddress; // sockaddr_in for IPv4, sockaddr_in6 for IPv6
-            unsigned int ClientSocketAddressLength = sizeof( ClientSocketAddress );
+            #if defined(SOCKET_PROTOCOL_IPV4)
+
+                struct sockaddr_in ClientSocketAddress;
+                unsigned int ClientSocketAddressLength = sizeof( ClientSocketAddress );
+
+            #elif defined(SOCKET_PROTOCOL_IPV6)
+
+                struct sockaddr_in6 ClientSocketAddress;
+                unsigned int ClientSocketAddressLength = sizeof( ClientSocketAddress );
+
+            #endif
+
             SOCKET ClientSocketHandle = accept( SocketHandle, (struct sockaddr*) &ClientSocketAddress, &ClientSocketAddressLength );
 
             if ( ClientSocketHandle == -1 ) {
 
                 continue; }
 
-            char ClientSocketAddressString [256];
-            inet_ntop( AF_INET6, &ClientSocketAddress.sin6_addr, ClientSocketAddressString, sizeof( ClientSocketAddressString ) ); // AF_INET for IPv4, AF_INET6 for IPv6
+            #if defined(SOCKET_PROTOCOL_IPV4)
 
-            printf( "Connecting to %s:%d...", ClientSocketAddressString, ntohs( ClientSocketAddress.sin6_port ) );
+                char ClientSocketAddressString [256];
+
+                inet_ntop( AF_INET, &ClientSocketAddress.sin_addr, ClientSocketAddressString, sizeof( ClientSocketAddressString ) );
+                printf( "Connecting to %s:%d...", ClientSocketAddressString, ntohs( ClientSocketAddress.sin_port ) );
+
+            #elif defined(SOCKET_PROTOCOL_IPV6)
+
+                char ClientSocketAddressString [256];
+
+                inet_ntop( AF_INET6, &ClientSocketAddress.sin6_addr, ClientSocketAddressString, sizeof( ClientSocketAddressString ) );
+                printf( "Connecting to [%s]:%d...", ClientSocketAddressString, ntohs( ClientSocketAddress.sin6_port ) );
+
+            #endif
 
             int16_t ClientIndex = -1;
 
@@ -256,14 +296,30 @@ int main ( int argc, char *argv[] ) {
 
                         if ( LineEnd != NULL ) { // On client request
 
-                            char Response [SOCKET_BUFFER_SIZE];
-                            Response[0] = '\0';
+                            // TODO Your code begin
 
-                            strcpy( Response, "You have sent a message starting with: \"" );
-                            strncpy( Response + 40, ClientBuffers[i], 24 );
-                            strcpy( Response + 40 + ( strlen( ClientBuffers[i] ) < 24 ? strlen( ClientBuffers[i] ) : 24 ), "\".\r\n> " );
-                            
-                            send( ClientSockets[i], Response, (unsigned int) strlen( Response ), 0 ); } } } } }
+                            if ( strcmp( ClientBuffers[i], "exit" ) == 0 ) {
+
+                                disconnectClient( ClientSockets, i ); }
+
+                            else if ( strcmp( ClientBuffers[i], "terminate" ) == 0 ) {
+
+                                ServerStatus = SERVER_STATUS_SAFE_TERMINATION; }
+
+                            else {
+
+                                char Response [SOCKET_BUFFER_SIZE];
+                                Response[0] = '\0';
+
+                                strcpy( Response, "You have sent me a message starting with: \"" );
+                                strncpy( Response + 43, ClientBuffers[i], 24 );
+                                strcpy( Response + 43 + ( strlen( ClientBuffers[i] ) < 24 ? strlen( ClientBuffers[i] ) : 24 ), "\".\r\n> " );
+
+                                send( ClientSockets[i], Response, (unsigned int) strlen( Response ), 0 ); }
+
+                            // TODO Your code end
+
+                            } } } } }
 
         if ( ServerStatus == 1 ) { // Additional server routine
 
@@ -283,14 +339,35 @@ int main ( int argc, char *argv[] ) {
 
 void disconnectClient ( SOCKET ClientSockets [], uint16_t ClientIndex ) {
 
-    struct sockaddr_in6 ClientSocketAddress; // sockaddr_in for IPv4, sockaddr_in6 for IPv6
-    unsigned int ClientSocketAddressLength = sizeof( ClientSocketAddress );
+    #if defined(SOCKET_PROTOCOL_IPV4)
+
+        struct sockaddr_in ClientSocketAddress;
+        unsigned int ClientSocketAddressLength = sizeof( ClientSocketAddress );
+
+    #elif defined(SOCKET_PROTOCOL_IPV6)
+
+        struct sockaddr_in6 ClientSocketAddress;
+        unsigned int ClientSocketAddressLength = sizeof( ClientSocketAddress );
+
+    #endif
+
     getpeername( ClientSockets[ClientIndex], (struct sockaddr*) &ClientSocketAddress, &ClientSocketAddressLength );
 
-    char ClientSocketAddressString [256];
-    inet_ntop( AF_INET6, &ClientSocketAddress.sin6_addr, ClientSocketAddressString, sizeof( ClientSocketAddressString ) ); // AF_INET for IPv4, AF_INET6 for IPv6
+    #if defined(SOCKET_PROTOCOL_IPV4)
 
-    printf( "Disconnecting from %s:%d...", ClientSocketAddressString, ntohs( ClientSocketAddress.sin6_port ) );
+        char ClientSocketAddressString [256];
+
+        inet_ntop( AF_INET, &ClientSocketAddress.sin_addr, ClientSocketAddressString, sizeof( ClientSocketAddressString ) );
+        printf( "Disconnecting from %s:%d...", ClientSocketAddressString, ntohs( ClientSocketAddress.sin_port ) );
+
+    #elif defined(SOCKET_PROTOCOL_IPV6)
+
+        char ClientSocketAddressString [256];
+
+        inet_ntop( AF_INET6, &ClientSocketAddress.sin6_addr, ClientSocketAddressString, sizeof( ClientSocketAddressString ) );
+        printf( "Disconnecting from [%s]:%d...", ClientSocketAddressString, ntohs( ClientSocketAddress.sin6_port ) );
+
+    #endif
 
     CLOSE_SOCKET( ClientSockets[ClientIndex] );
     ClientSockets[ClientIndex] = 0;
