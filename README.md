@@ -3,7 +3,7 @@
 ## Idea
 
 Cross-platform, customizable telnet server with IPv4 and IPv6 support,
-written only in C.
+written just in C.
 
 ## License
 
